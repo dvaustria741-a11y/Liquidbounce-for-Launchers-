@@ -27,8 +27,10 @@ import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.future.future
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.runInterruptible
 import net.ccbluex.liquidbounce.LiquidBounce.CLIENT_NAME
 import net.ccbluex.liquidbounce.api.core.ApiConfig
 import net.ccbluex.liquidbounce.api.core.ioScope
@@ -312,6 +314,13 @@ object LiquidBounce : EventListener {
     private suspend fun initializeResources(
         dispatcher: CoroutineDispatcher,
     ) = withContext(dispatcher) {
+        // Mobile launcher: skip ALL network calls — they use blocking Java I/O which
+        // cannot be cancelled by coroutines, so withTimeoutOrNull is ineffective.
+        // Cosmetics, translations, marketplace etc are non-essential; skip them.
+        if (BrowserBackendManager.isSkipping) {
+            logger.info("Mobile launcher detected — skipping API network calls.")
+            return@withContext
+        }
         logger.info("Initializing API...")
         // Lookup API config — wrap with timeout so a slow/unavailable API cannot
         // hang the LoadingOverlay forever (critical for Android launcher compatibility).
@@ -387,13 +396,18 @@ object LiquidBounce : EventListener {
         RenderSystem.assertOnRenderThread()
 
         BrowserBackendManager.init()
-        ClientInteropServer.start()
-        if (!ClientInteropServer.isSkipping) {
-            ThemeManager.init()
-            // Preload marketplace items
-            ConfigSystem.load(MarketplaceManager)
-            ConfigSystem.load(ThemeManager)
-            ThemeManager.load()
+        if (!BrowserBackendManager.isSkipping) {
+            // Skip interop server + theme on mobile launchers — they depend on
+            // the browser backend which isn't available on Android ARM.
+            ClientInteropServer.start()
+            if (!ClientInteropServer.isSkipping) {
+                ThemeManager.init()
+                ConfigSystem.load(MarketplaceManager)
+                ConfigSystem.load(ThemeManager)
+                ThemeManager.load()
+            }
+        } else {
+            logger.info("Mobile launcher — skipping ClientInteropServer and ThemeManager.")
         }
 
         BlurEffectRenderer
