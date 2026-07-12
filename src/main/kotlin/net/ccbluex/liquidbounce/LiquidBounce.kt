@@ -416,29 +416,29 @@ object LiquidBounce : EventListener {
             // and then starts the browser through render thread.
             BrowserBackendManager.makeDependenciesAvailable(this)
 
-            // Initialize deep learning engine as task, because we cannot know if DJL will request
-            // resources from the internet.
-            launch("Deep Learning") { task ->
-                runCatching {
-                    DeepLearningEngine.init(task)
-                    ModelManager.load()
-                }.onFailure { exception ->
-                    task.subTasks.clear()
-
-                    // LiquidBounce can still run without deep learning,
-                    // and we don't want to crash the client if it fails.
-                    logger.info("Failed to initialize deep learning.", exception)
-                }
-            }
-
-            launch("Marketplace") { task ->
-                runCatching {
-                    MarketplaceManager.updateAll(task)
-                }.onFailure { exception ->
-                    logger.error("Failed to update marketplace items.", exception)
+            if (!BrowserBackendManager.isSkipping) {
+                // Initialize deep learning engine as task, because we cannot know if DJL will request
+                // resources from the internet.
+                launch("Deep Learning") { task ->
+                    runCatching {
+                        DeepLearningEngine.init(task)
+                        ModelManager.load()
+                    }.onFailure { exception ->
+                        task.subTasks.clear()
+                        logger.info("Failed to initialize deep learning.", exception)
+                    }
                 }
 
-                task.isCompleted = true
+                launch("Marketplace") { task ->
+                    runCatching {
+                        MarketplaceManager.updateAll(task)
+                    }.onFailure { exception ->
+                        logger.error("Failed to update marketplace items.", exception)
+                    }
+                    task.isCompleted = true
+                }
+            } else {
+                logger.info("Mobile launcher — skipping Deep Learning and Marketplace tasks.")
             }
         }
 
