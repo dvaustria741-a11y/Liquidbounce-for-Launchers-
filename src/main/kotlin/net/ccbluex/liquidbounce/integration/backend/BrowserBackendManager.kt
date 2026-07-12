@@ -77,16 +77,13 @@ object BrowserBackendManager : EventListener {
         val javaHome = System.getProperty("java.home") ?: ""
         if (javaHome.contains("/data/data/") || javaHome.contains("/data/user/")) return true
 
-        // ARM + Linux + no display = almost certainly an Android launcher
+        // ARM + Linux = Android launcher. No legitimate desktop LiquidBounce
+        // user runs aarch64/arm Linux; skip display check entirely to be safe.
         val arch = System.getProperty("os.arch") ?: ""
         val osName = System.getProperty("os.name") ?: ""
         if (osName.equals("linux", ignoreCase = true) &&
             (arch.startsWith("aarch64") || arch.startsWith("arm"))) {
-            val hasDisplay = System.getenv("DISPLAY")
-                ?: System.getenv("WAYLAND_DISPLAY")
-                ?: System.getenv("DESKTOP_SESSION")
-                ?: System.getenv("XDG_CURRENT_DESKTOP")
-            if (hasDisplay == null) return true
+            return true
         }
         return false
     }
