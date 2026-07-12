@@ -28,6 +28,7 @@ import kotlinx.coroutines.future.future
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import net.ccbluex.liquidbounce.LiquidBounce.CLIENT_NAME
 import net.ccbluex.liquidbounce.api.core.ApiConfig
 import net.ccbluex.liquidbounce.api.core.ioScope
@@ -312,55 +313,65 @@ object LiquidBounce : EventListener {
         dispatcher: CoroutineDispatcher,
     ) = withContext(dispatcher) {
         logger.info("Initializing API...")
-        // Lookup API config
-        ApiConfig.config
+        // Lookup API config — wrap with timeout so a slow/unavailable API cannot
+        // hang the LoadingOverlay forever (critical for Android launcher compatibility).
+        withTimeoutOrNull(15_000L) { ApiConfig.config }
+            ?: logger.warn("ApiConfig timed out after 15 s — continuing without it.")
 
-        supervisorScope {
-            launch {
-                // Load translations
-                LanguageManager.loadDefault()
-            }
-            launch {
-                val update = update ?: return@launch
-                logger.info("[Update] Update available: $clientVersion -> ${update.lbVersion}")
-            }
-            launch {
-                // Load cosmetics
-                CosmeticService.refreshCarriers(force = true) {
-                    logger.info("Successfully loaded ${CosmeticService.carriers.size} cosmetics carriers.")
+        // All network calls run concurrently; a 30 s outer timeout ensures that
+        // no single stalled request can block the resource loading phase forever.
+        withTimeoutOrNull(30_000L) {
+            supervisorScope {
+                launch {
+                    // Load translations
+                    withTimeoutOrNull(10_000L) { LanguageManager.loadDefault() }
                 }
-            }
-            launch {
-                // Download player heads
-                HeadsCreativeModeTab.heads.getFinalState()
-            }
-            launch {
-                // Load configs
-                AutoConfig.reloadConfigs()
-            }
-            launch {
-                IpInfoApi.original
-            }
-            launch {
-                ConfigSystem.load(ClientAccountManager)
-                if (ClientAccount.ENV_ACCOUNT != null) {
-                    ClientAccountManager.clientAccount = ClientAccount.ENV_ACCOUNT
+                launch {
+                    val update = update ?: return@launch
+                    logger.info("[Update] Update available: $clientVersion -> ${update.lbVersion}")
                 }
-
-                if (ClientAccountManager.clientAccount != ClientAccount.EMPTY_ACCOUNT) {
-                    runCatching {
-                        ClientAccountManager.clientAccount.renew()
-                    }.onFailure {
-                        logger.error("Failed to renew client account token.", it)
-                        ClientAccountManager.clientAccount = ClientAccount.EMPTY_ACCOUNT
-                    }.onSuccess {
-                        logger.info("Successfully renewed client account token.")
+                launch {
+                    // Load cosmetics
+                    withTimeoutOrNull(15_000L) {
+                        CosmeticService.refreshCarriers(force = true) {
+                            logger.info("Successfully loaded ${CosmeticService.carriers.size} cosmetics carriers.")
+                        }
+                    } ?: logger.warn("CosmeticService timed out — skipping.")
+                }
+                launch {
+                    // Download player heads
+                    withTimeoutOrNull(15_000L) { HeadsCreativeModeTab.heads.getFinalState() }
+                        ?: logger.warn("HeadsCreativeModeTab timed out — skipping.")
+                }
+                launch {
+                    // Load configs
+                    withTimeoutOrNull(10_000L) { AutoConfig.reloadConfigs() }
+                }
+                launch {
+                    withTimeoutOrNull(10_000L) { IpInfoApi.original }
+                }
+                launch {
+                    ConfigSystem.load(ClientAccountManager)
+                    if (ClientAccount.ENV_ACCOUNT != null) {
+                        ClientAccountManager.clientAccount = ClientAccount.ENV_ACCOUNT
                     }
 
-                    ConfigSystem.store(ClientAccountManager)
+                    if (ClientAccountManager.clientAccount != ClientAccount.EMPTY_ACCOUNT) {
+                        runCatching {
+                            withTimeoutOrNull(10_000L) { ClientAccountManager.clientAccount.renew() }
+                                ?: logger.warn("Account renewal timed out — skipping.")
+                        }.onFailure {
+                            logger.error("Failed to renew client account token.", it)
+                            ClientAccountManager.clientAccount = ClientAccount.EMPTY_ACCOUNT
+                        }.onSuccess {
+                            logger.info("Successfully renewed client account token.")
+                        }
+
+                        ConfigSystem.store(ClientAccountManager)
+                    }
                 }
             }
-        }
+        } ?: logger.warn("initializeResources supervisorScope hit 30 s timeout — continuing.")
 
         logger.info("API initialization done.")
 
@@ -490,13 +501,8 @@ object LiquidBounce : EventListener {
     @Suppress("unused")
     private val screenHandler = handler<ScreenEvent>(priority = FIRST_PRIORITY) { event ->
         val taskManager = taskManager ?: return@handler
-
-        // Skip the loading screen entirely when running on a mobile launcher.
-        // BrowserBackendManager.isSkipping is set to true early on Android/ARM
-        // so MCEF tasks are never launched — but guard here too so any hanging
-        // download task can never trap the user on TaskProgressScreen forever.
+        // Mobile launchers (Android/ARM): browser is skipped, so never trap on TaskProgressScreen.
         if (BrowserBackendManager.isSkipping) return@handler
-
         if (!taskManager.isCompleted && event.screen !is TaskProgressScreen) {
             event.cancelEvent()
             mc.setScreen(TaskProgressScreen("Loading Required Libraries", taskManager))
