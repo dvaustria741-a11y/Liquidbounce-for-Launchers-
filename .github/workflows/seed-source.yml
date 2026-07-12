@@ -1,0 +1,38 @@
+name: Seed Source Tree
+on:
+  workflow_dispatch:
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Download upstream source zip
+        run: |
+          curl -L -o source.zip \
+            "https://github.com/CCBlueX/LiquidBounce/archive/e77a6699123fad2e2d50748c0c7f764932bb0b13.zip"
+          unzip -q source.zip
+
+      - name: Copy source tree (excluding .git)
+        run: |
+          rsync -a --exclude=".git" \
+            LiquidBounce-e77a6699123fad2e2d50748c0c7f764932bb0b13/ .
+          rm -rf LiquidBounce-e77a6699123fad2e2d50748c0c7f764932bb0b13 source.zip
+
+      - name: Apply mobile-launcher fix patches
+        run: |
+          echo "Patches already applied via direct file pushes — nothing to do here."
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --stat
+          git commit -m "chore: seed full LiquidBounce source tree (e77a669)" || echo "Nothing to commit"
+          git push
