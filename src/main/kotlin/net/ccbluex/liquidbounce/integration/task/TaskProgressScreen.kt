@@ -10,7 +10,7 @@
  *
  * LiquidBounce is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
@@ -36,15 +36,19 @@ import net.minecraft.util.ARGB
 import java.text.DecimalFormat
 
 /**
- * Screen that displays TaskManager progress
+ * Hard deadline before we force-proceed regardless of task or browser state.
+ * Prevents the screen from hanging forever when the MCEF download itself stalls
+ * on Android (tasks never complete, so the secondary browser timeout never fires).
+ * 600 ticks = 30 seconds @ 20 TPS.
  */
+private const val HARD_TIMEOUT_TICKS = 600
+
 /**
- * If the browser has not initialized within this many ticks (~30 seconds),
- * we force-proceed to TitleScreen. This prevents mobile-launcher users
- * (ZalithLauncher, PojavLauncher, MojoLauncher, etc.) from being stuck
- * forever when JCEF/MCEF cannot start on Android ARM.
+ * After tasks complete, extra time to wait for browser initialisation.
+ * On desktop this is enough; on mobile the hard timeout fires first.
+ * 200 ticks = 10 seconds.
  */
-private const val BROWSER_INIT_TIMEOUT_TICKS = 600 // 30 seconds @ 20 tps
+private const val BROWSER_INIT_TIMEOUT_TICKS = 200
 
 class TaskProgressScreen(
     title: String,
@@ -52,6 +56,7 @@ class TaskProgressScreen(
 ) : Screen(title.asPlainText()) {
 
     private val percentFormat = DecimalFormat("0.0")
+    private var totalTicks = 0
     private var ticksWaitingForBrowser = 0
 
     override fun render(context: GuiGraphics, mouseX: Int, mouseY: Int, partialTick: Float) {
@@ -59,20 +64,15 @@ class TaskProgressScreen(
 
         val cx = width / 2.0
         val cy = height / 2.0
-
         val progressBarWidth = width / 1.5
-
         val poseStack = context.pose()
 
-        // Progress
         val progress = taskManager.progress
         val textLines = getTaskLines(progress)
 
-        // Draw text
         val textHeight = textLines.size * (font.lineHeight + 2)
         var yOffset = (cy - textHeight / 2).toInt() - 40
 
-        // Draw title
         context.drawString(
             font,
             title.string.asPlainText(ChatFormatting.GOLD),
@@ -81,10 +81,8 @@ class TaskProgressScreen(
             -1,
             true
         )
-
         yOffset += font.lineHeight + 10
 
-        // Draw task information
         for (line in textLines) {
             context.drawString(
                 font,
@@ -99,25 +97,16 @@ class TaskProgressScreen(
 
         val progressBarHeight = 14
 
-        // Draw progress bar
         poseStack.pushMatrix()
         poseStack.translate(cx.toFloat(), yOffset.toFloat() + 18.0f)
         poseStack.translate(progressBarWidth.toFloat() * -0.5f, progressBarHeight.toFloat() * -0.5f)
 
-        // Bar border
-        context.fill(
-            0, 0,
-            progressBarWidth.toInt(), progressBarHeight.toInt(),
-            -1
-        )
-
-        // Bar background
+        context.fill(0, 0, progressBarWidth.toInt(), progressBarHeight.toInt(), -1)
         context.fill(
             2, 2,
             (progressBarWidth - 2).toInt(), (progressBarHeight - 2).toInt(),
             ARGB.color(255, 24, 26, 27)
         )
-
         context.fill(
             4, 4,
             ((progressBarWidth - 4) * progress).toInt(), (progressBarHeight - 4).toInt(),
@@ -130,7 +119,6 @@ class TaskProgressScreen(
         val activeTasks = taskManager.getActiveTasks()
         val speed = formatTotalSpeed(activeTasks)
 
-        // Prepare text to display
         val textLines = mutableListOf<Component>()
         textLines.add("Total: ${percentFormat.format(progress * 100)}%$speed".asPlainText())
         textLines.add(PlainText.EMPTY)
@@ -153,34 +141,38 @@ class TaskProgressScreen(
 
     private fun formatTotalSpeed(tasks: List<Task>): String {
         val total = calculateTotalSpeed(tasks)
-
-        return if (total > 0) {
-            " (${total.formatAsCapacity()}/s)"
-        } else {
-            ""
-        }
+        return if (total > 0) " (${total.formatAsCapacity()}/s)" else ""
     }
 
     private fun calculateTotalSpeed(tasks: List<Task>): Long {
-        return tasks.filter { task ->
-            !task.isCompleted
-        }.sumOf { task ->
+        return tasks.filter { !it.isCompleted }.sumOf { task ->
             ((task as? ResourceTask)?.speed ?: 0L) + calculateTotalSpeed(task.subTasks.values.toList())
         }
     }
 
     override fun tick() {
+        totalTicks++
+
+        // ── Hard deadline ──────────────────────────────────────────────────────
+        // Force-proceed after 30 s no matter what.  This is the safety net for
+        // Android/ARM launchers where the MCEF download stalls indefinitely
+        // (tasks never complete → the secondary browser timeout never fires).
+        if (totalTicks >= HARD_TIMEOUT_TICKS) {
+            BrowserBackendManager.isSkipping = true
+            mc.setScreen(TitleScreen())
+            return
+        }
+
         val browserReady = BrowserBackendManager.backend?.isInitialized == true ||
             BrowserBackendManager.isSkipping
 
+        // Happy path: everything is ready
         if (taskManager.isCompleted && browserReady) {
             mc.setScreen(TitleScreen())
             return
         }
 
-        // Safety net for mobile launchers (Android/ARM) where MCEF may never initialize.
-        // After BROWSER_INIT_TIMEOUT_TICKS with tasks complete but browser not ready,
-        // force-skip the browser and proceed to the title screen.
+        // Tasks done but browser not yet initialised — secondary timeout
         if (taskManager.isCompleted && !browserReady) {
             ticksWaitingForBrowser++
             if (ticksWaitingForBrowser >= BROWSER_INIT_TIMEOUT_TICKS) {
