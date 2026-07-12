@@ -10,7 +10,7 @@
  *
  * LiquidBounce is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
@@ -52,7 +52,7 @@ object BrowserBackendManager : EventListener {
 
     /**
      * Detects whether LiquidBounce is running inside an Android-based Minecraft launcher
-     * (e.g. ZalithLauncher, PojavLauncher, MojoLauncher, etc.).
+     * (e.g. ZalithLauncher v2, PojavLauncher, MojoLauncher, etc.).
      * JCEF/MCEF is incompatible with Android ARM, so we skip it automatically.
      */
     private fun isRunningOnMobileLauncher(): Boolean {
@@ -63,20 +63,30 @@ object BrowserBackendManager : EventListener {
         if (vmVendor.contains("android", ignoreCase = true)) return true
         val runtimeName = System.getProperty("java.runtime.name") ?: ""
         if (runtimeName.contains("android", ignoreCase = true)) return true
-        // PojavLauncher / ZalithLauncher set a custom os.name still reporting "Linux"
-        // but expose a data-dir prop pointing to Android storage
-        val dataDir = System.getenv("POJAV_ENVIRON")
-            ?: System.getenv("ZALITH_ENVIRON")
-            ?: System.getenv("MOJO_ENVIRON")
-        if (dataDir != null) return true
-        // Fall back: ARM architecture on Linux with no desktop session is a strong signal
+
+        // ZalithLauncher v2, PojavLauncher, MojoLauncher and forks set one of these
+        val knownEnvVars = listOf(
+            "POJAV_ENVIRON", "ZALITH_ENVIRON", "MOJO_ENVIRON",
+            "POJAV_HOME", "ZALITH_HOME",
+            "MOVTERY_LAUNCHER", "ZALITH_LAUNCHER",
+            "ANDROID_LAUNCHER"
+        )
+        if (knownEnvVars.any { System.getenv(it) != null }) return true
+
+        // java.home pointing into Android data directories is a dead giveaway
+        val javaHome = System.getProperty("java.home") ?: ""
+        if (javaHome.contains("/data/data/") || javaHome.contains("/data/user/")) return true
+
+        // ARM + Linux + no display = almost certainly an Android launcher
         val arch = System.getProperty("os.arch") ?: ""
         val osName = System.getProperty("os.name") ?: ""
         if (osName.equals("linux", ignoreCase = true) &&
             (arch.startsWith("aarch64") || arch.startsWith("arm"))) {
-            val desktopSession = System.getenv("DESKTOP_SESSION")
+            val hasDisplay = System.getenv("DISPLAY")
+                ?: System.getenv("WAYLAND_DISPLAY")
+                ?: System.getenv("DESKTOP_SESSION")
                 ?: System.getenv("XDG_CURRENT_DESKTOP")
-            if (desktopSession == null) return true
+            if (hasDisplay == null) return true
         }
         return false
     }
@@ -85,13 +95,9 @@ object BrowserBackendManager : EventListener {
         PersistentLocalStorage
     }
 
-    /**
-     * Makes the browser dependencies available and initializes the browser
-     * when the dependencies are available.
-     */
     fun makeDependenciesAvailable(taskManager: TaskManager) {
         if (isSkipping) {
-            logger.warn("Environment variable 'LB_BROWSER_SKIP' is set to 'true'.")
+            logger.warn("Browser skipped — mobile launcher or LB_BROWSER_SKIP set.")
             return
         }
 
@@ -109,21 +115,13 @@ object BrowserBackendManager : EventListener {
         runCatching {
             browserBackend.makeDependenciesAvailable(taskManager, ::start)
         }.onFailure { ex ->
-            // On mobile launchers (Android ARM) or incompatible systems, CEF cannot run.
-            // Fall back to no-browser mode so the loading screen can proceed.
             logger.warn("Browser backend unavailable, falling back to no-browser mode: ${ex.message}")
             isSkipping = true
         }
     }
 
-    /**
-     * Initializes the browser.
-     */
     fun start() {
-        // Ensure that the browser is available
         logger.info("Initializing browser...")
-
-        // Ensure that the browser is started on the render thread
         RenderSystem.assertOnRenderThread()
 
         val browserBackend = backend ?: return
@@ -137,9 +135,6 @@ object BrowserBackendManager : EventListener {
         logger.info("Successfully initialized browser.")
     }
 
-    /**
-     * Shuts down the browser.
-     */
     fun stop() = runCatching {
         backend?.stop()
     }.onFailure {
@@ -148,12 +143,8 @@ object BrowserBackendManager : EventListener {
         logger.info("Successfully shutdown browser.")
     }
 
-    /**
-     * Causes an update of every browser by re-setting their viewport.
-     */
     fun forceUpdate() = mc.execute {
         val browserBackend = backend ?: return@execute
-
         for (browser in browserBackend.browsers) {
             try {
                 browser.viewport = browser.viewport
@@ -166,10 +157,7 @@ object BrowserBackendManager : EventListener {
     @Suppress("unused")
     private val gameRenderHandler = handler<GameRenderEvent>(priority = FIRST_PRIORITY) {
         val browserBackend = backend ?: return@handler
-        if (!browserBackend.isInitialized) {
-            return@handler
-        }
-
+        if (!browserBackend.isInitialized) return@handler
         browserBackend.update()
     }
 
