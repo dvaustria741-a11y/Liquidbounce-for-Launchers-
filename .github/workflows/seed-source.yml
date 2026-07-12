@@ -1,6 +1,9 @@
 name: Seed Source Tree
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/seed-source.yml"
 
 jobs:
   seed:
@@ -14,19 +17,18 @@ jobs:
 
       - name: Download upstream source zip
         run: |
-          curl -L -o source.zip \
+          curl -L --retry 3 -o source.zip \
             "https://github.com/CCBlueX/LiquidBounce/archive/e77a6699123fad2e2d50748c0c7f764932bb0b13.zip"
           unzip -q source.zip
 
-      - name: Copy source tree (excluding .git)
+      - name: Copy source tree (keep our fixes)
         run: |
           rsync -a --exclude=".git" \
+            --exclude="src/main/kotlin/net/ccbluex/liquidbounce/integration/backend/BrowserBackendManager.kt" \
+            --exclude="src/main/kotlin/net/ccbluex/liquidbounce/integration/backend/backends/cef/CefBrowserBackend.kt" \
+            --exclude="src/main/kotlin/net/ccbluex/liquidbounce/integration/task/TaskProgressScreen.kt" \
             LiquidBounce-e77a6699123fad2e2d50748c0c7f764932bb0b13/ .
           rm -rf LiquidBounce-e77a6699123fad2e2d50748c0c7f764932bb0b13 source.zip
-
-      - name: Apply mobile-launcher fix patches
-        run: |
-          echo "Patches already applied via direct file pushes — nothing to do here."
 
       - name: Commit and push
         run: |
@@ -34,5 +36,5 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --stat
-          git commit -m "chore: seed full LiquidBounce source tree (e77a669)" || echo "Nothing to commit"
+          git commit -m "chore: seed full LiquidBounce source tree (e77a669) — mobile launcher fixes preserved" || echo "Nothing to commit"
           git push
