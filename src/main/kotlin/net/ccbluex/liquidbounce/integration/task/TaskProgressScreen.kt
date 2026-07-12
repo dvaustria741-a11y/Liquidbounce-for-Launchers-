@@ -16,42 +16,43 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.integration.task
 
 import net.ccbluex.liquidbounce.integration.backend.BrowserBackendManager
 import net.ccbluex.liquidbounce.integration.task.type.ResourceTask
 import net.ccbluex.liquidbounce.integration.task.type.Task
 import net.ccbluex.liquidbounce.utils.client.asPlainText
+import net.ccbluex.liquidbounce.utils.client.formatAsCapacity
 import net.ccbluex.liquidbounce.utils.client.mc
+import net.ccbluex.liquidbounce.utils.collection.Pools
+import net.ccbluex.liquidbounce.utils.text.PlainText
+import net.minecraft.ChatFormatting
 import net.minecraft.client.gui.GuiGraphics
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.client.gui.screens.TitleScreen
+import net.minecraft.network.chat.Component
+import net.minecraft.util.ARGB
+import java.text.DecimalFormat
 
-/**
- * Mobile-launcher build: loading screen is bypassed entirely.
- * Browser (MCEF/JCEF) cannot run on Android ARM, so we force-skip
- * on init and go straight to the vanilla TitleScreen.
- * The ClickGUI (accessible via the GUI button / keybind) still works.
- */
+/** Mobile-launcher build: skip immediately, browser cannot run on Android ARM. */
 class TaskProgressScreen(
     title: String,
     private val taskManager: TaskManager
 ) : Screen(title.asPlainText()) {
 
+    private val percentFormat = DecimalFormat("0.0")
+
     override fun init() {
         super.init()
-        // Skip browser init immediately — it cannot run on Android launchers.
         BrowserBackendManager.isSkipping = true
-        mc.setScreen(TitleScreen())
+        // Use execute() so Minecraft finishes init before the screen swap
+        mc.execute { mc.setScreen(TitleScreen()) }
     }
 
-    // Stub render — should never be seen, but guard against edge cases
     override fun render(context: GuiGraphics, mouseX: Int, mouseY: Int, partialTick: Float) {
         renderMenuBackground(context)
     }
 
     override fun shouldCloseOnEsc() = false
     override fun isPauseScreen() = false
-
 }
