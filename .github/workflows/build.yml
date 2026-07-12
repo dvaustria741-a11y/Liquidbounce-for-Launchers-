@@ -41,9 +41,12 @@ jobs:
       - name: Build remapped jar
         run: ./gradlew remapJar --no-daemon
 
+      - name: List build outputs
+        run: find build/libs -type f | sort
+
       - name: Upload jar artifact
         uses: actions/upload-artifact@v4
         with:
           name: liquidbounce-launcher-build
-          path: build/libs/*-remapped.jar
-          if-no-files-found: warn
+          path: build/libs/*.jar
+          if-no-files-found: error
